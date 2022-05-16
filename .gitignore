@@ -1,0 +1,14 @@
+.dist
+.vscode
+build
+.history
+.cache
+bazel-bin/
+bazel-C++thread/
+bazel-out/
+bazel-testlog/
+.DS_Store
+bazel-bin
+bazel-C++thread
+bazel-out
+bazel-testlog

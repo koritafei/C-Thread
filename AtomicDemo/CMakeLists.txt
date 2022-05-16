@@ -1,0 +1,8 @@
+add_executable(RAII RAII.cc)
+add_executable(thread_num_run thread_num_run.cc)
+
+add_executable(spinlock_unittest spinLock_unittest.cc)
+add_executable(spinlocksleep_unittest spinLockSleep_unittest.cc)
+add_executable(mutex_unittest mutex_unittest.cc)
+
+add_executable(condition_variable_unittest condition_variable_unittest.cc)

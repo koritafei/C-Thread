@@ -1,0 +1,2 @@
+add_executable(simple_thread_pool simple_thread_pool.cc threadsafe_queue.hpp join_threader.hpp)
+#add_executable(interruptible_thread interruptible_thread.cc)

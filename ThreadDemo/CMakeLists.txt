@@ -1,0 +1,2 @@
+add_executable(thread_safe_stack thread_safe_stack.cc)
+add_executable(mutexdemo mutexdemo.cc)

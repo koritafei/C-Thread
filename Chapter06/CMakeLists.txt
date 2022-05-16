@@ -1,0 +1,10 @@
+add_executable(virnode_queue virnode_queue.cc)
+add_executable(threadsafe_queue threadsafe_queue.cc)
+add_executable(template_thread template_thread.cc)
+add_executable(queue_wait queue_wait.cc)
+add_executable(filestat filestat.cc)
+add_executable(fileoperator fileoperator.cc)
+
+link_libraries(-lboost_thread)
+#add_executable(threadsafe_map threadsafe_map.cc)
+add_executable(threadsafe_list threadsafe_list.cc)

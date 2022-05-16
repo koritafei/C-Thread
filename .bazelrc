@@ -1,0 +1,8 @@
+build --cxxopt="-std=c++20"
+build --copt=-O2
+build --remote_upload_local_results=false
+build --copt -DHAVE_ZLIB=1
+build --copt=-ggdb
+# unittest 
+test --define=unittest=true
+test --copt=-g

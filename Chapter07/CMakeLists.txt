@@ -1,0 +1,6 @@
+add_executable(threadsafe_nomutex_stack threadsafe_nomutex_stack.cc)
+add_executable(hazard_pointer_stack hazard_pointer_stack.cc)
+link_libraries(-latomic)
+add_executable(lock_free_stack lock_free_stack.cc)
+add_executable(lock_free_memory lock_free_memory.cc)
+add_executable(singon_product_queue singon_product_queue.cc)
