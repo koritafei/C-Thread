@@ -6,9 +6,9 @@ build
 bazel-bin/
 bazel-C++thread/
 bazel-out/
-bazel-testlog/
+bazel-testlogs/
 .DS_Store
 bazel-bin
 bazel-C++thread
 bazel-out
-bazel-testlog
+bazel-testlogs

@@ -1591,3 +1591,5 @@ int main() {
 ##### 启动策略
 显式的指定调用是在同一线程中执行(`std::launch::deffered`), 还是在不同线程中执行(`std::launch::async`).
 
+> 及早求值与惰性求值
+> 
