@@ -1592,4 +1592,213 @@ int main() {
 显式的指定调用是在同一线程中执行(`std::launch::deffered`), 还是在不同线程中执行(`std::launch::async`).
 
 > 及早求值与惰性求值
-> 
+> 在及早求值的情况下，立即求得表达式值；
+> 在惰性求值的情况下，仅在需要计算时才进行求值。
+
+
+```cpp
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <thread>
+
+int main() {
+  auto begin = std::chrono::system_clock::now();
+
+  auto asyncLazy  = std::async(std::launch::deferred, [] {
+    return std::chrono::system_clock::now();
+  });
+  auto asyncEager = std::async(std::launch::async, [] {
+    return std::chrono::system_clock::now();
+  });
+
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  auto lazyStart = asyncLazy.get() - begin;
+  auto edgeStart = asyncEager.get() - begin;
+
+  auto lazyDuration = std::chrono::duration<double>(lazyStart).count();
+  auto edgeDuration = std::chrono::duration<double>(edgeStart).count();
+
+  std::cout << "asyncLazy evaluated after : " << lazyDuration << " seconds."
+            << std::endl;
+  std::cout << "asyncEager  evaluated after : " << edgeDuration << " seconds."
+            << std::endl;
+}
+```
+发后即忘(`Fire and Forget`)
+比较特殊的`future`,不受某个变量的约束，只在原地运行。
+```cpp
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <thread>
+
+int main() {
+  std::async(std::launch::async, [] {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "first thread" << std::endl;
+  });
+
+  std::async(std::launch::async, [] {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::cout << "second thread" << std::endl;
+  });
+
+  std::cout << "main thread" << std::endl;
+}
+```
+并行执行程序，变为串行执行。
+
+##### 并行计算
+```cpp
+#include <future>
+#include <iostream>
+#include <numeric>
+#include <random>
+#include <vector>
+
+static const int NUM = 100000000;
+
+long long getDotProduct(std::vector<int> &v, std::vector<int> &w) {
+  auto vSize = v.size();
+
+  auto future1 = std::async([&] {
+    return std::inner_product(&v[0], &v[vSize / 4], &w[0], 0LL);
+  });
+
+  auto future2 = std::async([&] {
+    return std::inner_product(&v[vSize / 4], &v[vSize / 2], &w[vSize / 4], 0LL);
+  });
+
+  auto future3 = std::async([&] {
+    return std::inner_product(&v[vSize / 2],
+                              &v[vSize * 3 / 4],
+                              &w[vSize / 2],
+                              0LL);
+  });
+
+  auto future4 = std::async([&] {
+    return std::inner_product(&v[vSize * 3 / 4],
+                              &v[vSize],
+                              &w[vSize * 3 / 4],
+                              0LL);
+  });
+
+  return future1.get() + future2.get() + future3.get() + future4.get();
+}
+
+int main() {
+  std::random_device seed;
+
+  // generator
+  std::mt19937 engine(seed());
+
+  std::uniform_int_distribution<int> dist(0, 100);
+
+  std::vector<int> v;
+  std::vector<int> w;
+
+  v.reserve(NUM);
+  w.reserve(NUM);
+
+  for (int i = 0; i < NUM; i++) {
+    v.push_back(dist(engine));
+    w.push_back(dist(engine));
+  }
+
+  std::cout << "getDotProduct(v, w): " << getDotProduct(v, w) << std::endl;
+}
+```
+##### `std::packaged_task`
+用于异步调用的包装器。
+通过`pack.get_future()`可以获取相关的`future`。
+可以使用可调操作符`pack(pack())`执行`std::packaged_task`.
+处理`std::packaged_task`包含以下四个步骤：
+1. 打包：
+```cpp
+std::packaged_task<int(int,int)> sumTask([](int a, int b) {
+  return a + b;
+});
+```
+2. 创建`future`:
+```cpp
+std::future<int> sumResult = sumTask.get_future();
+```
+3. 执行计算：
+```cpp
+sumTask(1000, 200);
+```
+4. 查询结果。
+```cpp
+sumResult.get();
+```
+
+```cpp
+#include <deque>
+#include <future>
+#include <iostream>
+#include <thread>
+#include <utility>
+
+class sumUp {
+public:
+  int operator()(int beg, int end) {
+    long long int sum{0};
+
+    for (int i = beg; i < end; i++) {
+      sum += i;
+    }
+
+    return static_cast<int>(sum);
+  }
+};
+
+int main() {
+  sumUp sumUp1;
+  sumUp sumUp2;
+  sumUp sumUp3;
+  sumUp sumUp4;
+
+  // wrap tasks
+  std::packaged_task<int(int, int)> sumTask1{sumUp1};
+  std::packaged_task<int(int, int)> sumTask2{sumUp2};
+  std::packaged_task<int(int, int)> sumTask3{sumUp3};
+  std::packaged_task<int(int, int)> sumTask4{sumUp4};
+
+  // create future
+  std::future<int> sumResult1 = sumTask1.get_future();
+  std::future<int> sumResult2 = sumTask2.get_future();
+  std::future<int> sumResult3 = sumTask3.get_future();
+  std::future<int> sumResult4 = sumTask4.get_future();
+
+  // push the tasks on the container
+  std::deque<std::packaged_task<int(int, int)>> allTasks;
+  allTasks.push_back(std::move(sumTask1));
+  allTasks.push_back(std::move(sumTask2));
+  allTasks.push_back(std::move(sumTask3));
+  allTasks.push_back(std::move(sumTask4));
+
+  int begin{1};
+  int increment{2500};
+  int end = begin + increment;
+
+  // preform each calculation in a separate thread
+  while (!allTasks.empty()) {
+    std::packaged_task<int(int, int)> myTask = std::move(allTasks.front());
+    allTasks.pop_front();
+    std::thread sumThread{std::move(myTask), begin, end};
+    begin = end;
+    end += increment;
+
+    sumThread.detach();
+  }
+
+  // pick up the results
+  auto sum =
+      sumResult1.get() + sumResult2.get() + sumResult3.get() + sumResult4.get();
+
+  std::cout << "sum of 0 ... 10000 = " << sum << std::endl;
+}
+```
+
