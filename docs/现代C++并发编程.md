@@ -1482,3 +1482,112 @@ int main() {
 > 如果全局变量是线程局部的，则可以保证每个线程都得到其数据副本，从而避免数据竞争。
 
 #### 条件变量
+```cpp
+#include <condition_variable>
+#include <iostream>
+#include <mutex>
+#include <thread>
+
+std::mutex mutex_;
+
+std::condition_variable condVar;
+
+bool dataReady{false};
+
+void doTheWork() {
+  std::cout << "Processing the shared data" << std::endl;
+}
+
+void waitngForWork() {
+  std::cout << "Worker: Waiting for work." << std::endl;
+  std::unique_lock<std::mutex> lck{mutex_};
+
+  condVar.wait(lck, [] {
+    return dataReady;
+  });
+
+  doTheWork();
+  std::cout << " done work " << std::endl;
+}
+
+void setDataReady() {
+  {
+    std::lock_guard<std::mutex> lck{mutex_};
+    dataReady = true;
+  }
+
+  condVar.notify_one();
+}
+
+int main() {
+  std::thread t1{setDataReady};
+  std::thread t2{waitngForWork};
+
+  t1.join();
+  t2.join();
+}
+```
+> `std::condition_ariable_any`
+> 可以等待符合`BasicLockble`的锁类型。
+
+##### 未唤醒和伪唤醒
+**未唤醒**
+发送方在接收方到达等待状态之前发送通知，导致通知丢失。
+**伪唤醒**
+没有发送通知，但是接收方被唤醒。
+
+### 任务
+`C++`处理异步任务，必须包含一个`<future>`的头文件。
+任务由一个参数化工作包和两个组件：`promise, future`组成，两者构建一条数据通道。
+`promise`执行工作包并将数据放入数据通道，`future`可以获取结果，两个组件可以运行在不同的线程中。
+特别是`future`可以在之后某个时间点获取结果，所以`promise和future`是分开的。
+> 将任务视为通信端的数据通道
+> 任务的行为类似通信点之间的数据通道。
+> 通道一端为`promise`,另一端为`future`.
+
+![任务](./images/任务.png)
+
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+
+int main() {
+  int         res;
+  std::thread t{[&] {
+    res = 2000 + 11;
+  }};
+
+  t.join();
+
+  std::cout << "res : " << res << std::endl;
+
+  auto fut = std::async([] {
+    return 2000 + 11;
+  });
+
+  std::cout << "fut.get() " << fut.get() << std::endl;
+}
+```
+
+任务 `VS` 线程
+
+|     标准     |         线程         |        任务         |
+| :----------: | :------------------: | :-----------------: |
+|   构成元素   |   创建线程和子线程   |  `promise和future`  |
+|   通信方式   |       共享变量       |      通信信道       |
+|   创建线程   |       必定创建       |        可选         |
+|   同步方式   |    通过`join`等待    | 使用`get`阻塞式调用 |
+| 线程中的异常 | 子线程和创建线程终止 |  返回`promise`的值  |
+|   通信类型   |        变量值        | 变量值，通知和异常  |
+
+`std::async`是创建任务的最简单的方法。
+
+> `srd::async`应该是首选
+> `C++`运行时决定`std::async`是否在独立线程中运行；
+> 决策可能取决于可用的`CPU`数量，系统的利用率或工作包的大小；
+> 使用`std::async`只需要指定运行的任务，`C++`运行时自动管理线程。
+
+##### 启动策略
+显式的指定调用是在同一线程中执行(`std::launch::deffered`), 还是在不同线程中执行(`std::launch::async`).
+
