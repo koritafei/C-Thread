@@ -1802,3 +1802,410 @@ int main() {
 }
 ```
 
+`std::shared_ptr`用于继承体系：
+```cpp
+#include <iostream>
+#include <memory>
+
+class Base {
+public:
+  Base()  = default;
+  ~Base() = default;
+
+  virtual void print() {
+    std::cout << "base print" << std::endl;
+  }
+};
+
+class Dev : public Base {
+public:
+  Dev() = default;
+  virtual ~Dev() {
+  }
+
+  virtual void print() override {
+    std::cout << "dev print" << std::endl;
+  }
+};
+
+std::shared_ptr<Base> GetHandler(std::string const &name = "") {
+  if (name == "dev") {
+    return std::make_shared<Dev>();
+  }
+
+  return std::make_shared<Base>();
+}
+
+int main() {
+  auto handler = GetHandler("dev");
+  handler->print();
+
+  auto handler2 = GetHandler();
+
+  handler2->print();
+}
+```
+
+`std::packaged_task`相关接口：
+|                 成员函数                 |                    函数描述                    |
+| :--------------------------------------: | :--------------------------------------------: |
+| `pack.swap(pack2)/std::swap(pack,pack2)` |                    交换对象                    |
+|              `pack.valid()`              |            检查对象中的函数是否合法            |
+|           `pack.get_future()`            |                  返回`future`                  |
+|   `pack.make_ready_at_thread_exit(ex)`   | 执行的函数，如果线程还存在，那么结果还是可用的 |
+|              `pack.reset()`              |        充值任务状态，擦除之前执行的结果        |
+
+```cpp
+#include <functional>
+#include <future>
+#include <iostream>
+#include <utility>
+#include <vector>
+
+void calcProducts(std::packaged_task<int(int, int)> &     task,
+                  const std::vector<std::pair<int, int>> &pairs) {
+  for (auto &pair : pairs) {
+    auto future = task.get_future();
+    task(pair.first, pair.second);
+
+    std::cout << pair.first << " * " << pair.second << " = " << future.get()
+              << std::endl;
+    task.reset();
+  }
+}
+
+int main() {
+  std::vector<std::pair<int, int>> allPairs;
+  allPairs.push_back(std::make_pair(1, 2));
+  allPairs.push_back(std::make_pair(3, 4));
+  allPairs.push_back(std::make_pair(5, 8));
+  allPairs.push_back(std::make_pair(6, 9));
+
+  std::packaged_task<int(int, int)> task{[](int fir, int sec) {
+    return fir * sec;
+  }};
+
+  calcProducts(task, allPairs);
+
+  std::cout << "\n\n";
+
+  std::thread t{calcProducts, std::ref(task), allPairs};
+
+  t.join();
+}
+```
+##### `std::promise与std::future`
+两者可以完全控制任务.
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+#include <utility>
+
+void product(std::promise<int> &&intPromise, int a, int b) {
+  intPromise.set_value(a * b);
+}
+
+struct Div {
+  void operator()(std::promise<int> &&intPromise, int a, int b) const {
+    intPromise.set_value(a / b);
+  }
+};
+
+int main() {
+  int a = 20;
+  int b = 10;
+
+  // define promise
+  std::promise<int> prodPromise;
+  std::promise<int> divPromise;
+
+  // get the future
+  std::future<int> prodFuture = prodPromise.get_future();
+  std::future<int> divFuture  = divPromise.get_future();
+
+  // calculate the result in a separate thread
+  std::thread prodThread{product, std::move(prodPromise), a, b};
+
+  Div         div;
+  std::thread divThread{div, std::move(divPromise), a, b};
+
+  // get the result
+  std::cout << "20 * 10 = " << prodFuture.get() << std::endl;
+  std::cout << "20 / 10 = " << divFuture.get() << std::endl;
+
+  prodThread.join();
+  divThread.join();
+
+  return 0;
+}
+```
+`std::promise`允许设置一个值，一个通知，一个异常；也可以以延迟的方式提供结果。
+`std::promise prom`的成员函数：
+
+|                 成员函数                 |         函数描述          |
+| :--------------------------------------: | :-----------------------: |
+| `prom.swap(prom2)/std::swap(prom,prom2)` |         交换对象          |
+|           `prom.get_future()`            |       返回`future`        |
+|          `prom.set_value(val)`           |          设置值           |
+|         `prom.set_exception(ex)`         |         设置异常          |
+|   `prom.set_value_at_thread_exit(val)`   |  `promise`推出前存储该值  |
+| `prom.set_exception_at_thread_exit(ex)`  | `promise`退出前存储该异常 |
+
+`std::future`可以完成的事情：
+* 从`promise`获取值；
+* 查询`promise`的值是否可获取；
+* 等待`promise`的通知，这个等待可以使用一个时间点或一个时间段来完成；
+* 创建共享`future(std::shared_future)`。
+
+成员函数如下：
+|         成员函数          |                             函数描述                              |
+| :-----------------------: | :---------------------------------------------------------------: |
+|       `fut.share()`       |                     返回`std::shared_future`                      |
+|        `fut.get()`        |                           返回值或异常                            |
+|       `fut.valid()`       | 检查当前`future`是否可以嗲调用`get`,调用`get`之后使用返回`false`. |
+|       `fut.wait()`        |                             等待结果                              |
+|   `fut.wait(realtime)`    |    `realtime`时间段内获取结果，并返回`std::future_status`实例     |
+| `fut.wait_until(abstime)` |  在`abstime`时间点前等待获取结果，并返回`std::future_status`实例  |
+
+`future`和共享的`future`的`wait_for, wait_until`成员函数将返回其状态，有三种可能：
+```cpp
+enum class future_status{
+  ready,
+  timeout,
+  deffered
+};
+```
+
+|    状态    |          描述          |
+| :--------: | :--------------------: |
+|  `ready`   |    结果已经准备就绪    |
+| `timeout`  | 结果超时得到，视为过期 |
+| `deffered` |      函数还未运行      |
+
+```cpp
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <thread>
+
+using namespace std::literals::chrono_literals;
+
+void getAnswer(std::promise<int> intPromise) {
+  std::this_thread::sleep_for(3s);
+  intPromise.set_value(100);
+}
+
+int main() {
+  std::promise<int> answerPromise;
+
+  auto        fut = answerPromise.get_future();
+  std::thread prodThread{getAnswer, std::move(answerPromise)};
+
+  std::future_status status{};
+  do {
+    status = fut.wait_for(0.2s);
+    std::cout << " ... do somethind else " << std::endl;
+  } while (status != std::future_status::ready);
+
+  std::cout << "The answer " << fut.get() << std::endl;
+
+  prodThread.join();
+}
+```
+`std::future`和`std::promise`是一对一的关系，`std::share_future`和`std::promise`是多对一的关系。
+
+`std::share_future`创建的两种方式：
+1. 通过`std::promise`来创建`std::share_future`: `std::share_future<int> fut = prom.get_future()`;
+2. 通过`fut`的`fut.share()`来创建，在调用`fut.share()`之后`fut.valid()`返回`false`.
+
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+#include <utility>
+
+std::mutex countMutex_;
+
+struct Div {
+  void operator()(std::promise<int> &&intPromise, int a, int b) {
+    intPromise.set_value(a / b);
+  }
+};
+
+struct Requestor {
+  void operator()(std::shared_future<int> shaFut) {
+    std::lock_guard<std::mutex> coutGuard{countMutex_};
+    std::cout << "ThreadId ( " << std::this_thread::get_id() << " ), ";
+    std::cout << "20 / 10 = " << shaFut.get() << std::endl;
+  }
+};
+
+int main() {
+  std::promise<int>       divPromise;
+  std::shared_future<int> divResult = divPromise.get_future();
+
+  Div         div;
+  std::thread divThread{div, std::move(divPromise), 20, 10};
+  Requestor   req;
+
+  std::thread shareThread1{req, divResult};
+  std::thread shareThread2{req, divResult};
+  std::thread shareThread3{req, divResult};
+  std::thread shareThread4{req, divResult};
+
+  divThread.join();
+  shareThread1.join();
+  shareThread2.join();
+  shareThread3.join();
+  shareThread4.join();
+}
+```
+`std::future和std::promise`的工作包都是函数。
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+#include <utility>
+
+std::mutex coutMutex_;
+
+struct Div {
+  void operator()(std::promise<int> &&intPromise, int a, int b) {
+    intPromise.set_value(a / b);
+  }
+};
+
+struct Requestor {
+  void operator()(std::shared_future<int> shatFut) {
+    std::lock_guard<std::mutex> lock{coutMutex_};
+    std::cout << "ThreadId ( " << std::this_thread::get_id() << " ) ";
+    std::cout << " 20 / 10 = " << shatFut.get() << std::endl;
+  }
+};
+
+int main() {
+  std::cout << std::boolalpha << std::endl;
+  std::promise<int> divPromise;
+  std::future<int>  divResult = divPromise.get_future();
+
+  std::cout << "divResult.valid() : " << divResult.valid() << std::endl;
+
+  Div div;
+
+  std::thread divThread{div, std::move(divPromise), 20, 10};
+  std::cout << "divResult.valid() : " << divResult.valid() << std::endl;
+
+  std::shared_future<int> shatFut = divResult.share();
+
+  std::cout << "divResult.valid() : " << divResult.valid() << std::endl;
+
+  Requestor   req;
+  std::thread t1{req, shatFut};
+  std::thread t2{req, shatFut};
+  std::thread t3{req, shatFut};
+  std::thread t4{req, shatFut};
+
+  divThread.join();
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+}
+```
+#### 异常
+如果`std::async和std::packaged_task`抛出异常，异常存储在共享状态中。
+当`future fut`调用`fut.get()`时异常重新抛出。
+
+```cpp
+#include <exception>
+#include <future>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <utility>
+
+struct Div {
+  void operator()(std::promise<int> &&intPromise, int a, int b) {
+    try {
+      if (0 == b) {
+        std::string errMsg = std::string("Illegal division by zero: ") +
+                             std::to_string(a) + " / " + std::to_string(b);
+        throw std::runtime_error(errMsg);
+      }
+      intPromise.set_value(a / b);
+    } catch (...) {
+      intPromise.set_exception(std::current_exception());
+    }
+  }
+};
+
+void executeDivision(int nom, int dnom) {
+  std::promise<int> divPromise;
+  std::future<int>  divResult = divPromise.get_future();
+
+  Div div;
+
+  std::thread divThread{div, std::move(divPromise), nom, dnom};
+
+  try {
+    std::cout << nom << " / " << dnom << " = " << divResult.get() << std::endl;
+  } catch (std::runtime_error &e) {
+    std::cout << e.what() << std::endl;
+  }
+
+  divThread.join();
+}
+
+int main() {
+  executeDivision(20, 0);
+  executeDivision(20, 10);
+}
+```
+> `std::current_exception和std::make_exception_for`
+> `std::current_exception()`捕获当前异常，并创建一个`std::exception_ptr`
+> `std::exception_ptr` 保存异常对象的副本或引用
+> 如果没有异常处理时调用该函数，返回一个空的`std::exception_ptr`
+> 为了不在`try/catch`中使用`intPromise.set_exception(std::current_exception())`检索抛出异常，可以直接使用`intPromise.set_exception(std::make_exception_ptr(std::runtime_error(errMess)))`
+
+
+##### 通知
+`promise和future`实现的生产者和消费值：
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+#include <utility>
+
+void doTheWork() {
+  std::cout << "Processing shared data" << std::endl;
+}
+
+void waitForWork(std::future<void> &&fut) {
+  std::cout << "Worker: waiting for work" << std::endl;
+  fut.wait();
+  doTheWork();
+
+  std::cout << "work done" << std::endl;
+}
+
+void setDataReady(std::promise<void> &&prom) {
+  std::cout << "Data is ready" << std::endl;
+  prom.set_value();
+}
+
+int main() {
+  std::cout << std::endl;
+  std::promise<void> sendReady;
+
+  auto        fut = sendReady.get_future();
+  std::thread t1{waitForWork, std::move(fut)};
+
+  std::thread t2{setDataReady, std::move(sendReady)};
+
+  t1.join();
+  t2.join();
+}
+```
+
+
