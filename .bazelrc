@@ -1,8 +1,8 @@
-build --cxxopt="-std=c++17"
-build --copt=-O2
+build --cxxopt='-std=c++17'
+build --cxxopt='-O2'
+build --cxxopt='-ggdb'
 build --remote_upload_local_results=false
 build --copt -DHAVE_ZLIB=1
-build --copt=-ggdb
 # unittest 
 test --define=unittest=true
 test --copt=-g

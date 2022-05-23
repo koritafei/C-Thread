@@ -2207,5 +2207,580 @@ int main() {
   t2.join();
 }
 ```
+执行策略可以指定算法串行，并行，还是向量化并行。头文件`<xecution>`.
+`C++17`中的向量策略：
+> `std::execution::sequenced_policy`: 串行执行
+> `std::execution::parallel_policy` ：多线程并行执行
+> `std::execution::parallel_unsequenced_policy`：多线程上并行执行，可以循环交叉
 
+```cpp
+#include <algorithm>
+#include <cmath>
+#include <execution>
+#include <iostream>
+#include <vector>
+
+void shiff(std::vector<int> &v) {
+  int size = v.size();
+  int k    = 0;
+  for (int i = 0; i < size; i++) {
+    while ((k = random() % size) > i) {
+      std::swap(v[i], v[k]);
+    }
+  }
+}
+
+int main() {
+  std::vector<int> v = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << "\n" << std::endl;
+  shiff(v);
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << std::endl;
+  std::sort(v.begin(), v.end());
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << "\n" << std::endl;
+
+  shiff(v);
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << std::endl;
+
+  std::sort(std::execution::seq, v.begin(), v.end());
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << "\n" << std::endl;
+
+  shiff(v);
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << std::endl;
+  std::sort(std::execution::par, v.begin(), v.end());
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << "\n" << std::endl;
+
+  shiff(v);
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << std::endl;
+  std::sort(std::execution::par_unseq, v.begin(), v.end());
+  for (auto &it : v) {
+    std::cout << it << ' ';
+  }
+  std::cout << "\n" << std::endl;
+}
+```
+#### 异常
+如果执行策略的算法发生异常，将调用`std::terminate`.
+`std::terminate`调用`std::terminate_handler`, 之后调用`std::abort`让异常终止。
+
+```cpp
+#include <algorithm>
+#include <execution>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+int main() {
+  std::vector<int> myVec{1, 2, 3, 4, 5};
+
+  try {
+    std::for_each(myVec.begin(), myVec.end(), [](int) {
+      throw std::runtime_error("Without execution policy");
+    });
+  } catch (const std::runtime_error &e) {
+    std::cout << e.what() << std::endl;
+  }
+
+  try {
+    std::for_each(std::execution::par, myVec.begin(), myVec.end(), [](int) {
+      throw std::runtime_error("With execution policy");
+    });
+  } catch (const std::runtime_error &e) {
+    std::cout << e.what() << std::endl;
+  } catch (...) {
+    std::cout << "Catch-all exceptions" << std::endl;
+  }
+}
+```
+#### 数据竞争和死锁的风险
+```cpp
+#include <algorithm>
+#include <execution>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+int main() {
+  std::vector<int> v   = {1, 2, 3};
+  int              sum = 0;
+
+  std::for_each(std::execution::par, v.begin(), v.end(), [&sum](int i) {
+    sum += i + i;
+    std::cout << "ThreadId : " << std::this_thread::get_id() << " : " << sum
+              << std::endl;
+  });
+}
+```
+`execution`:
+```cpp
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <execution>
+#include <iostream>
+#include <optional>
+#include <random>
+#include <string>
+#include <vector>
+
+constexpr long long size = 500000000;
+const double        pi   = std::acos(-1);
+
+template <typename Func>
+void getExecutionTime(const std::string &title, Func func) {
+  const auto sta = std::chrono::steady_clock::now();
+  func();
+
+  const std::chrono::duration<double> dur =
+      std::chrono::steady_clock::now() - sta;
+
+  std::cout << title << ": " << dur.count() << " sec." << std::endl;
+}
+
+int main() {
+  std::vector<double> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                     engine;
+  std::uniform_real_distribution<> uniformistDist(0, pi / 2);
+  for (long long i = 0; i < size; ++i) {
+    randValues.push_back(uniformistDist(engine));
+  }
+
+  std::vector<double> workVec{randValues};
+  getExecutionTime("std::execution::seq", [workVec]() mutable {
+    std::transform(std::execution::seq,
+                   workVec.begin(),
+                   workVec.end(),
+                   workVec.begin(),
+                   [](double arg) {
+                     return std::tan(arg);
+                   });
+  });
+
+  getExecutionTime("std::execution::par", [workVec]() mutable {
+    std::transform(std::execution::par,
+                   workVec.begin(),
+                   workVec.end(),
+                   workVec.begin(),
+                   [](double arg) {
+                     return std::tan(arg);
+                   });
+  });
+
+  getExecutionTime("std::execution::par_unseq", [workVec]() mutable {
+    std::transform(std::execution::par_unseq,
+                   workVec.begin(),
+                   workVec.end(),
+                   workVec.begin(),
+                   [](double arg) {
+                     return std::tan(arg);
+                   });
+  });
+}
+```
+求向量元素的加和，单循环模式。
+```cpp
+#include <chrono>
+#include <iostream>
+#include <random>
+#include <vector>
+
+constexpr long long size = 10000000;
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::random_device              seed;
+  std::mt19937                    engine(seed());
+  std::uniform_int_distribution<> uniformDIst(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDIst(engine));
+  }
+
+  const auto         sta = std::chrono::steady_clock::now();
+  unsigned long long sum{};
+  for (auto &n : randValues) {
+    sum += n;
+  }
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <random>
+#include <vector>
+
+constexpr long long size = 10000000;
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::random_device              seed;
+  std::mt19937                    engine(seed());
+  std::uniform_int_distribution<> uniformDIst(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDIst(engine));
+  }
+
+  const auto sta = std::chrono::steady_clock::now();
+
+  std::atomic<unsigned long long> sum{};
+  std::cout << std::boolalpha << "sum.is_lock_free() : " << sum.is_lock_free()
+            << std::endl;
+  for (auto &n : randValues) {
+    sum += n;
+  }
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << "\n\n" << std::endl;
+
+  sum = 0;
+  for (auto &n : randValues) {
+    sum.fetch_add(n);
+  }
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << "\n\n" << std::endl;
+}
+```
+多线程，使用共享变量求和：
+```cpp
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+std::mutex myMutex;
+
+void sumUp(unsigned long long     &sum,
+           const std::vector<int> &val,
+           unsigned long long      beg,
+           unsigned long long      end) {
+  for (auto it = beg; it < end; ++it) {
+    std::lock_guard<std::mutex> lock{myMutex};
+    sum += val[it];
+  }
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  unsigned long long sum = 0;
+  const auto         sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::ref(sum), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::ref(sum), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::ref(sum), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::ref(sum), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+原子模式多线程加和：
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+std::mutex myMutex;
+
+void sumUp(std::atomic<unsigned long long> &sum,
+           const std::vector<int>          &val,
+           unsigned long long               beg,
+           unsigned long long               end) {
+  for (auto it = beg; it < end; ++it) {
+    sum.fetch_add(val[it], std::memory_order_relaxed);
+  }
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  std::atomic<unsigned long long> sum{};
+
+  const auto sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::ref(sum), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::ref(sum), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::ref(sum), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::ref(sum), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+##### 线程本地加和
+```cpp
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+std::mutex myMutex;
+
+void sumUp(unsigned long long     &sum,
+           const std::vector<int> &val,
+           unsigned long long      beg,
+           unsigned long long      end) {
+  unsigned long long tmp = 0;
+  for (auto it = beg; it < end; ++it) {
+    tmp += val[it];
+  }
+  std::lock_guard<std::mutex> lock{myMutex};
+  sum += tmp;
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  unsigned long long sum = 0;
+  const auto         sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::ref(sum), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::ref(sum), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::ref(sum), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::ref(sum), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+原子变量模式：
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+
+void sumUp(std::atomic<unsigned long long> &sum,
+           const std::vector<int>          &val,
+           unsigned long long               beg,
+           unsigned long long               end) {
+  unsigned long long tmp = 0;
+  for (auto it = beg; it < end; ++it) {
+    tmp += val[it];
+  }
+
+  sum.fetch_add(tmp, std::memory_order_relaxed);
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  std::atomic<unsigned long long> sum{};
+
+  const auto sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::ref(sum), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::ref(sum), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::ref(sum), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::ref(sum), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+使用线程本地数据：
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+thread_local unsigned long long tmp = 0;
+
+void sumUp(std::atomic<unsigned long long> &sum,
+           const std::vector<int>          &val,
+           unsigned long long               beg,
+           unsigned long long               end) {
+  for (auto it = beg; it < end; ++it) {
+    tmp += val[it];
+  }
+
+  sum.fetch_add(tmp, std::memory_order_relaxed);
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  std::atomic<unsigned long long> sum{};
+
+  const auto sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::ref(sum), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::ref(sum), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::ref(sum), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::ref(sum), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << "seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+使用异步模式：
+```cpp
+
+```
 
