@@ -2781,6 +2781,520 @@ int main() {
 ```
 使用异步模式：
 ```cpp
+#include <atomic>
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
 
+constexpr long long size = 100000000;
+constexpr long long fir  = 25000000;
+constexpr long long sec  = 50000000;
+constexpr long long thi  = 75000000;
+constexpr long long fou  = 100000000;
+
+thread_local unsigned long long tmp = 0;
+
+void sumUp(std::promise<unsigned long long> &&prom,
+           const std::vector<int>            &val,
+           unsigned long long                 beg,
+           unsigned long long                 end) {
+  for (auto it = beg; it < end; ++it) {
+    tmp += val[it];
+  }
+
+  prom.set_value(tmp);
+}
+
+int main() {
+  std::vector<int> randValues;
+  randValues.reserve(size);
+
+  std::mt19937                    engine;
+  std::uniform_int_distribution<> uniformDist(1, 10);
+
+  for (long long i = 0; i < size; i++) {
+    randValues.push_back(uniformDist(engine));
+  }
+
+  std::promise<unsigned long long> prom1;
+  std::promise<unsigned long long> prom2;
+  std::promise<unsigned long long> prom3;
+  std::promise<unsigned long long> prom4;
+
+  std::future<unsigned long long> fut1 = prom1.get_future();
+  std::future<unsigned long long> fut2 = prom2.get_future();
+  std::future<unsigned long long> fut3 = prom3.get_future();
+  std::future<unsigned long long> fut4 = prom4.get_future();
+
+  const auto sta = std::chrono::steady_clock::now();
+
+  std::thread t1{sumUp, std::move(prom1), std::ref(randValues), 0, fir};
+  std::thread t2{sumUp, std::move(prom2), std::ref(randValues), fir, sec};
+  std::thread t3{sumUp, std::move(prom3), std::ref(randValues), sec, thi};
+  std::thread t4{sumUp, std::move(prom4), std::ref(randValues), thi, fou};
+
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
+
+  auto sum = fut1.get() + fut2.get() + fut3.get() + fut4.get();
+
+  std::chrono::duration<double> dur = std::chrono::steady_clock::now() - sta;
+
+  std::cout << "Time for mySumition " << dur.count() << " seconds" << std::endl;
+  std::cout << "Result: " << sum << std::endl;
+}
+```
+单例实现：
+```cpp
+#include <chrono>
+#include <iostream>
+
+constexpr auto tenMill = 10000000;
+
+class MySingLeton {
+public:
+  static MySingLeton &getInstance() {
+    static MySingLeton instance;
+
+    volatile int dummy{};
+
+    return instance;
+  }
+
+private:
+  MySingLeton()                    = default;
+  ~MySingLeton()                   = default;
+  MySingLeton(const MySingLeton &) = delete;
+  MySingLeton &operator=(const MySingLeton &) = delete;
+};
+
+int main() {
+  constexpr auto fourtyMill = 4 * tenMill;
+  const auto     begin      = std::chrono::steady_clock::now();
+
+  for (size_t i = 0; i <= fourtyMill; i++) {
+    MySingLeton::getInstance();
+  }
+
+  const auto end = std::chrono::steady_clock::now() - begin;
+
+  std::cout << std::chrono::duration<double>(end).count() << std::endl;
+}
+```
+`call once`单例实现：
+```cpp
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <thread>
+
+constexpr auto tenMill = 10000000;
+
+class MySingLeton {
+public:
+  static MySingLeton &getInstance() {
+    std::call_once(initInstanceFlag, &MySingLeton::initInstance);
+    volatile int dummy{};
+
+    return *instance;
+  }
+
+private:
+  MySingLeton()                    = default;
+  ~MySingLeton()                   = default;
+  MySingLeton(const MySingLeton &) = delete;
+  MySingLeton &operator=(const MySingLeton &) = delete;
+
+  static MySingLeton   *instance;
+  static std::once_flag initInstanceFlag;
+
+  static void initInstance() {
+    instance = new MySingLeton();
+  }
+};
+
+MySingLeton   *MySingLeton::instance = nullptr;
+std::once_flag MySingLeton::initInstanceFlag;
+
+std::chrono::duration<double> getTime() {
+  constexpr auto fourtyMill = 4 * tenMill;
+  const auto     begin      = std::chrono::steady_clock::now();
+
+  for (size_t i = 0; i <= fourtyMill; i++) {
+    MySingLeton::getInstance();
+  }
+
+  const auto end = std::chrono::steady_clock::now() - begin;
+
+  return end;
+}
+
+int main() {
+  auto       fut1  = std::async(std::launch::async, getTime);
+  auto       fut2  = std::async(std::launch::async, getTime);
+  auto       fut3  = std::async(std::launch::async, getTime);
+  auto       fut4  = std::async(std::launch::async, getTime);
+  const auto total = fut1.get() + fut2.get() + fut3.get() + fut4.get();
+
+  std::cout << "total : " << total.count() << std::endl;
+}
+```
+### `C++20/C++23`
+`Excutor`是`C++`执行中的基本构造块，在执行中扮演如同容器分配器的角色。
+是一组关于在何处，何时以及如何调用可运行单元的规则组成。
+> 何处：可调用项在内部或外部处理器上运行，并且结果是从内部或外部处理器中进行读取；
+> 何时：可调用项可以立即运行，也可以延迟运行；
+> 如何：可调用项可以在`CPU或GPU`上执行，甚至可以以项量化方式执行。
+
+每个`excutor`都具有与所执行的函数相关联的属性。
+`excutor`的属性：
+可以通过`execution::require和execution::prefer`将属性与`excutor`相关联。
+
+|     属性     |                                                                                                      描述                                                                                                       |
+| :----------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|    方向性    |                                          执行函数可以是"触发即忘"(`execution::oneway`),返回一个`future(execution::twoway)`或者返回一个`continuation(execution::then)`                                           |
+|    基数性    |                                                                   执行函数可以创建一个(`execution::single`)或多个执行代理(`execution::bulk`)                                                                    |
+|    阻塞性    |                                   函数可阻塞也可不阻塞,有三个互斥的阻塞属性:  `execution::blocking.never` ,  `execution::blocking.possibly` 和  `execution::blocking.always`                                    |
+|    持续性    |                                                   任务可能是由客户端上的线程执行(  `execution::continuation` ),也可能不执行(  `execution::not_continuation `)                                                   |
+|    可塑性    |                                                   指定跟踪未完成的工作(  `exection::outstanding_work` ),或不跟踪(  `execution::outstanding_work.untracked `)                                                    |
+| 批量进度保证 | 指定在批量属性,  `execution::bulk_sequenced_execution `、  `execution::bulk_parallel_execution` 和 ` execution::bulk_unsequenced_execution `,这些属性是互斥的,通过使用这些属性创建的执行代理,可以保证任务的进度 |
+| 执行线程映射 |                                        将每个执行代理映射到一个新线程( ` execution::new_thread_execution_mapping `),或者不映射( ` execution::thread_execution_mapping `)                                        |
+|    分配器    |                                                                             将分配器(  `execution::allocator` )与`executor`关联起来                                                                             |
+
+##### `Executor`的目标
+
+1. 批量化:权衡可调用单元的转换成本和大小。
+2. 异构化:允许可调用单元在异构上下文中运行,并能返回结果。
+3. 有序化:可指定调用顺序,可选的顺序有:后进先出`LIFO`、先进先出`FIFO` 、优先级或耗时顺序,甚至是串行执行。
+4. 可控化:可调用的对象必须是特定计算资源的目标,可以延迟,也可以取消。
+5. 持续化:需要可调用信号来控制异步,这些信号必须指示结果是否可用、是否发生了错误、何时完成或调用方是否希望取消,并且显式启动或停止可调用项也应该是可以的。
+6. 层级化:层次结构允许在不增加用例复杂性的情况下添加功能。
+7. 可用化:易实现和易使用,应该是主要目标。
+8. 组合化:允许用户扩展`executor`的功能。
+9. 最小化:`executor`中不应该存在任何库外添加的内容。
+
+* 执行资源:能够执行可调用的硬件和/或软件,执行单元可以是`SIMD`,也可以是管理大量线程集合的运行时。`CPU`或`GPU`的执行资源是异构的,所以它们有不同的限制。
+* 执行上下文:是一个程序对象,表示特定的执行资源集合和这些资源中的执行代理。典型的例子是线程池、分布式运行时或异构运行时。
+* 执行代理:特定执行单元的上下文,该上下文映射到执行资源上的单个可调用单元。典型的例子是`CPU`线程或`GPU`执行单元。
+* 执行器:与特定上下文关联的执行对象。提供一个或多个执行函数,用于创建可调用函数对象的执行代理。
+
+```cpp
+#include <atomic>
+#include <experimental/thread_pool>
+#include <iostream>
+#include <utility>
+
+namespace execution = std::experimental::execution;
+using std::experimental::static_thread_pool;
+using std::experimental::executorsv1::future;
+
+int main() {
+  static_thread_pool pool{4};
+  auto               ex = pool.executor();
+
+  // One way, single
+  ex.execute([] {
+    std::cout << "We made it!" << std::endl;
+  });
+  std::cout << std::endl;
+  // Two way, single
+  future<int> f1 = ex.twoway_execute([] {
+    return 42;
+  });
+  f1.wait();
+  std::cout << "The result is : " << f1.get() << std::endl;
+
+  std::cout << std::endl;
+  // One way, bulk.
+  ex.bulk_execute(
+      [](int n, int& sha) {
+        std::cout << "part " << n << ": "
+                  << "shared: " << sha << "\n";
+      },
+      8,
+      [] {
+        return 0;
+      });
+  std::cout << std::endl;
+
+  // Two way, bulk, void result
+  future<void> f2 = ex.bulk_twoway_execute(
+      [](int n, std::atomic<short>& m) {
+        std::cout << "async part " << n;
+        std::cout << " atom: " << m++ << std::endl;
+      },
+      8,
+      [] {
+      },
+      [] {
+        std::atomic<short> atom(0);
+        return std::ref(atom);
+      });
+  f2.wait();
+  std::cout << "bulk result available" << std::endl;
+  std::cout << std::endl;
+
+  // Two way, bulk, non-void result.
+  future<double> f3 = ex.bulk_twoway_execute(
+      [](int n, double&, int&) {
+        std::cout << "async part " << n << " ";
+        std::cout << std::this_thread::get_id() << std::endl;
+      },
+      8,
+      [] {
+        std::cout << "Result factory: " << std::this_thread::get_id()
+                  << std::endl;
+        return 123.456;
+      },
+      [] {
+        std::cout << "Shared Parameter: " << std::this_thread::get_id()
+                  << std::endl;
+        return 0;
+      });
+  f3.wait();
+  std::cout << "bulk result is " << f3.get() << std::endl;
+}
+```
+`jthread`:
+```cpp
+#include <iostream>
+
+#include "jthread.hpp"
+
+int main() {
+  std::cout << std::endl;
+  std::cout << std::boolalpha;
+  std::jthread thr{[] {
+    std::cout << "Joinable std::thread" << std::endl;
+  }};
+  std::cout << "thr.joinable(): " << thr.joinable() << std::endl;
+  std::cout << std::endl;
+}
+```
+
+### 模式与最佳实践
+每个模式都由三部分组成其规则：描述特定上下文、问题和解决方案之间的关系。
+模式是对特定解决方案的设计挑战。
+同步模式：
+```cpp
+#include <functional>
+#include <iostream>
+#include <string>
+#include <thread>
+
+using namespace std::chrono_literals;
+
+void byCopy(bool b) {
+  std::this_thread::sleep_for(1ms);
+  std::cout << "byCopy : " << b << std::endl;
+}
+
+void byReference(bool &b) {
+  std::this_thread::sleep_for(1ms);
+  std::cout << "byReference : " << b << std::endl;
+}
+
+void byConstReference(const bool &b) {
+  std::this_thread::sleep_for(1ms);
+  std::cout << "byConstReference : " << b << std::endl;
+}
+
+int main() {
+  bool shared{false};
+
+  std::thread t1{byCopy, shared};
+  std::thread t2{byReference, std::ref(shared)};
+  std::thread t3{byConstReference, std::cref(shared)};
+
+  shared = true;
+
+  t1.join();
+  t2.join();
+  t3.join();
+}
+```
+如果参数为值对象，通过复制参数必然无数据竞争。
+> 值对象
+> 是一个对象，相等性基于状态。
+> 值对象是不可改变的，以便在创建为相等的情况下，保持相同的生命周期。
+> 如果通过复制将值对象传递给线程，则不需要同步访问。
+
+引用：
+```cpp
+#include <iostream>
+#include <thread>
+
+class NonCopyableClass {
+public:
+  NonCopyableClass() = default;
+
+  NonCopyableClass(const NonCopyableClass &) = delete;
+  NonCopyableClass &operator=(const NonCopyableClass &) = delete;
+
+private:
+};
+
+void perConstReference(const NonCopyableClass &nonCopy) {
+}
+
+int main() {
+  NonCopyableClass nonCopy;
+
+  perConstReference(nonCopy);
+
+  std::thread t{perConstReference, std::ref(nonCopy)};
+  t.join();
+}
+```
+引用参数的生命周期：
+```cpp
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <thread>
+
+void executeTwoThread() {
+  const std::string localString{"local string"};
+
+  std::thread t1{[localString] {
+    std::cout << "Per Copy " << localString << std::endl;
+  }};
+
+  std::thread t2{[&localString] {
+    std::cout << "Per Ref " << localString << std::endl;
+  }};
+
+  t1.detach();
+  t2.detach();
+}
+
+using namespace std::chrono_literals;
+
+int main() {
+  executeTwoThread();
+  std::this_thread::sleep_for(1s);
+}
+```
+##### 范围锁
+```cpp
+#include <iostream>
+#include <mutex>
+#include <new>
+#include <string>
+#include <thread>
+#include <utility>
+
+class scopedLock {
+public:
+  explicit scopedLock(std::mutex &m) : mut_(m) {
+    mut_.lock();
+    std::cout << "Lock the mutex " << &mut_ << std::endl;
+  }
+
+  ~scopedLock() {
+    std::cout << "Release the mutex " << &mut_ << std::endl;
+    mut_.unlock();
+  }
+
+private:
+  std::mutex &mut_;
+};
+
+int main() {
+  std::mutex mut;
+  scopedLock spl{mut};
+
+  std::cout << "\nBefore local scope " << std::endl;
+  {
+    std::mutex mut1;
+    scopedLock spl{mut1};
+  }
+  std::cout << "\nAfter local scope " << std::endl;
+
+  std::cout << "\nBefore try-catch lock " << std::endl;
+  try {
+    std::mutex mut3;
+    scopedLock spl{mut3};
+    throw std::bad_alloc();
+  } catch (std::bad_alloc &e) {
+    std::cout << e.what() << std::endl;
+  }
+  std::cout << "\nAfter try-catch lock " << std::endl;
+}
+```
+##### 策略锁
+将策略模式用于锁，将锁定策略放到实例对象中，并使其成为一个可以热插拔的组件。
+![策略模式](./images/策略模式.png)
+
+```cpp
+#include <iostream>
+#include <memory>
+
+class Strategy {
+public:
+  typedef std::shared_ptr<Strategy> ptr;
+
+  virtual void operator()() = 0;
+  virtual ~Strategy()       = default;
+
+private:
+};
+
+class Context {
+public:
+  explicit Context() : _start(nullptr) {
+  }
+
+  void setStrategy(Strategy::ptr ptr) {
+    _start = ptr;
+  }
+
+  void stratefy() {
+    if (nullptr != _start) {
+      (*_start)();
+    }
+  }
+
+private:
+  Strategy::ptr _start;
+};
+
+class Strategy1 : public Strategy {
+  void operator()() override {
+    std::cout << "Foo" << std::endl;
+  }
+};
+
+class Strategy2 : public Strategy {
+  void operator()() override {
+    std::cout << "Bar" << std::endl;
+  }
+};
+
+class Strategy3 : public Strategy {
+  void operator()() override {
+    std::cout << "FooBar" << std::endl;
+  }
+};
+
+int main() {
+  Context con;
+  con.setStrategy(std::make_shared<Strategy1>());
+  con.stratefy();
+
+  con.setStrategy(std::make_shared<Strategy2>());
+  con.stratefy();
+
+  con.setStrategy(std::make_shared<Strategy3>());
+  con.stratefy();
+}
 ```
 

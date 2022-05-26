@@ -1,6 +1,6 @@
-build --cxxopt='-std=c++17'
-build --cxxopt='-O2'
-build --cxxopt='-ggdb'
+build --action_env=BAZEL_CXXOPTS='-std=c++2z'
+build --action_env=BAZEL_CXXOPTS='-O2'
+build --action_env=BAZEL_CXXOPTS='-g'
 build --remote_upload_local_results=false
 build --copt -DHAVE_ZLIB=1
 # unittest 
