@@ -3297,4 +3297,390 @@ int main() {
   con.stratefy();
 }
 ```
+策略锁实现的两种经典方式：运行时多态(面向对象)和编译时多态(模板)。
+* 优点
+  * 运行时多态
+    * 允许在运行时配置锁策略
+    * 面向对象开发人员更容易理解
+  * 编译时多态
+    * 无抽象的惩罚
+    * 扁平的层次结构
+
+* 缺点
+  * 运行时多态
+    * 额外需要一次指针
+    * 可能有很深的派生层次
+  * 编译时多态
+    * 出错时有非常详细的信息
+
+**运行时多态**
+```cpp
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+
+class Lock {
+public:
+  typedef std::shared_ptr<Lock> ptr;
+
+  virtual void lock() const   = 0;
+  virtual void unlock() const = 0;
+
+private:
+};
+
+class StrategizedLocking {
+public:
+  typedef std::shared_ptr<StrategizedLocking> ptr;
+
+  explicit StrategizedLocking(Lock &l) : _lock(l) {
+    _lock.lock();
+  }
+
+  ~StrategizedLocking() {
+    _lock.unlock();
+  }
+
+private:
+  Lock &_lock;
+};
+
+struct NullObjectMutex {
+  void lock(){};
+  void unlock(){};
+};
+
+class NoLock : public Lock {
+  void lock() const override {
+    std::cout << "NoLock::lock" << std::endl;
+    nullObjetcMutex.lock();
+  }
+
+  void unlock() const override {
+    std::cout << "NoLock unlock" << std::endl;
+    nullObjetcMutex.unlock();
+  }
+
+  mutable NullObjectMutex nullObjetcMutex;
+};
+
+class ExclusiveLock : public Lock {
+  void lock() const override {
+    std::cout << "ExclusiveLock::lock" << std::endl;
+    mutex.lock();
+  }
+
+  void unlock() const override {
+    std::cout << "ExclusiveLock unlock" << std::endl;
+    mutex.unlock();
+  }
+
+  mutable std::mutex mutex;
+};
+
+class SharedLock : public Lock {
+  void lock() const override {
+    std::cout << "SharedLock::lock" << std::endl;
+    sharedMutex.lock_shared();
+  }
+
+  void unlock() const override {
+    std::cout << "SharedLock unlock" << std::endl;
+    sharedMutex.unlock_shared();
+  }
+
+  mutable std::shared_mutex sharedMutex;
+};
+
+int main() {
+  NoLock             noLock;
+  StrategizedLocking stratLock1{noLock};
+  {
+    ExclusiveLock      exLock;
+    StrategizedLocking stratLock2{exLock};
+    {
+      SharedLock         sharLock;
+      StrategizedLocking startLock3{sharLock};
+    }
+  }
+}
+```
+> 空对象
+> 类`NullObjectMutex`是空对象模式的一个例子,由空方法组成,算是一个占位符,这样便于优化器可以将它完全删除。
+
+**编译时多态**
+```cpp
+#include <iostream>
+#include <mutex>
+#include <shared_mutex>
+
+template <typename LOCK>
+class StrategizedLocking {
+public:
+  explicit StrategizedLocking(LOCK &l) : _lock(l) {
+    _lock.lock();
+  }
+
+  ~StrategizedLocking() {
+    _lock.unlock();
+  }
+
+private:
+  LOCK &_lock;
+};
+
+struct NullObjectMutex {
+  void lock() {
+  }
+
+  void unlock() {
+  }
+};
+
+class NoLock {
+public:
+  void lock() {
+    std::cout << "NoLock::Lock " << std::endl;
+    _nullObjectMutex.lock();
+  }
+
+  void unlock() {
+    std::cout << "NoLock::unlock " << std::endl;
+    _nullObjectMutex.unlock();
+  }
+
+private:
+  mutable NullObjectMutex _nullObjectMutex;
+};
+
+class ExclusiveLock {
+public:
+  void lock() {
+    std::cout << "ExclusiveLock:lock " << std::endl;
+    _mutex.lock();
+  }
+
+  void unlock() {
+    std::cout << "ExclusiveLock::unlock " << std::endl;
+    _mutex.unlock();
+  }
+
+private:
+  mutable std::mutex _mutex;
+};
+
+class SharedLock {
+public:
+  void lock() {
+    std::cout << "SharedLock::lock " << std::endl;
+    _shared_mutex.lock_shared();
+  }
+
+  void unlock() {
+    std::cout << "SharedLock::unlock " << std::endl;
+    _shared_mutex.unlock_shared();
+  }
+
+private:
+  mutable std::shared_mutex _shared_mutex;
+};
+
+int main() {
+  NoLock             noLock;
+  StrategizedLocking stratLock1{noLock};
+  {
+    ExclusiveLock      exLock;
+    StrategizedLocking stratLock2{exLock};
+    {
+      SharedLock         sharLock;
+      StrategizedLocking startLock3{sharLock};
+    }
+  }
+}
+```
+##### 线程安全的接口
+```cpp
+#include <iostream>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+
+class Critical {
+public:
+  void interface1() {
+    std::lock_guard<std::mutex> lockguard{_mut};
+    implementation1();
+  }
+
+  void interface2() {
+    std::lock_guard<std::mutex> lockguard{_mut};
+    implementation3();
+    implementation2();
+    implementation1();
+  }
+
+private:
+  void implementation1() const {
+    std::cout << "implementation1: " << std::this_thread::get_id() << std::endl;
+  }
+
+  void implementation2() const {
+    std::cout << "implementation2: " << std::this_thread::get_id() << std::endl;
+  }
+
+  void implementation3() const {
+    std::cout << "implementation3: " << std::this_thread::get_id() << std::endl;
+  }
+
+  mutable std::mutex _mut;
+};
+
+int main() {
+  std::thread t1{[] {
+    Critical cir;
+    cir.interface1();
+  }};
+
+  std::thread t2{[] {
+    Critical cir;
+    cir.interface2();
+  }};
+
+  Critical cir;
+  cir.interface1();
+  cir.interface2();
+  t1.join();
+  t2.join();
+}
+```
+线程安全的接口有以下优点：
+1. 互斥锁不可能递归调用。在`c++`中非递归互斥对象的递归调用会导致未定义行为，通常会死锁
+2. 使用最小范围的锁定，同步代价最小。仅在关键类的公共或私有方法中使用  `std::recursive_mutex` 将产生重量级的同步,从而遭受性能惩罚
+
+存在的风险点：
+1. 类中使用静态成员和虚接口时需要特别注意；
+2. 当类有静态成员时，就必须同步该类实例上的所有成员函数。
+
+**虚接口**
+当重写虚接口时，即使重写的函数是私有的也应该有锁。
+```cpp
+#include <iostream>
+#include <mutex>
+#include <thread>
+
+class Base {
+public:
+  virtual void interface() {
+    std::lock_guard<std::mutex> lock{_mut};
+    std::cout << "Base Lock" << std::endl;
+  }
+
+private:
+  std::mutex _mut;
+};
+
+class Derived : public Base {
+  void interface() override {
+    std::cout << "Derived without Lock" << std::endl;
+  }
+};
+
+int main() {
+  Base *bar = new Derived();
+  bar->interface();
+
+  Derived der;
+  Base   &bar2 = der;
+  bar2.interface();
+}
+```
+有两种方法可以避免风险:
+1. 使接口成为非虚接口，这种技术称为`NVI(非虚接口)`；
+2. 将接口生命为`final`.
+
+#### 保护性暂挂模式
+锁和一些先决条件构成了保护性暂挂模式的基础组件。
+> 如果未满足先决条件，则将线程自己置为休眠状态。
+> 为避免数据竞争或死锁，检查线程时会使用锁。
+
+* 处于等待状态的线程，会根据通知更改状态，也可以主动请求更改状态，称之为“推拉原则”；
+* 等待可以有时限，也可以没有时限；
+* 可以将通知发给一个或所有等待的线程。
+
+```cpp
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <random>
+#include <string>
+#include <thread>
+#include <utility>
+
+int getRandomTime(int start, int end) {
+  std::random_device seed;
+  std::mt19937       engine{seed()};
+
+  std::uniform_int_distribution<int> dist{start, end};
+
+  return dist(engine);
+}
+
+class Worker {
+public:
+  explicit Worker(const std::string &name) : _name(name) {
+  }
+
+  void operator()(std::promise<void>     &&prepareWork,
+                  std::shared_future<void> boos2Worker) {
+    int prepareTime = getRandomTime(500, 2000);
+    std::this_thread::sleep_for(std::chrono::microseconds(prepareTime));
+
+    prepareWork.set_value();
+    std::cout << _name << ": "
+              << "Work prepared after " << prepareTime << " milliseconds."
+              << std::endl;
+
+    boos2Worker.wait();
+  }
+
+private:
+  std::string _name;
+};
+
+int main() {
+  std::promise<void>       startWorkPromise;
+  std::shared_future<void> startWorkFuture = startWorkPromise.get_future();
+
+  std::promise<void> herbPrepare;
+  std::future<void>  waitForHerb = herbPrepare.get_future();
+
+  Worker      herb{"herb"};
+  std::thread herbWork{herb, std::move(herbPrepare), startWorkFuture};
+
+  std::promise<void> scottPrepare;
+  std::future<void>  waitForScott = scottPrepare.get_future();
+
+  Worker      scott{"scott"};
+  std::thread scottWork{scott, std::move(scottPrepare), startWorkFuture};
+
+  std::promise<void> bjarnePrepare;
+  std::future<void>  waitForBjarne = bjarnePrepare.get_future();
+
+  Worker      bjarne{"bjarne"};
+  std::thread bjarneWork{bjarne, std::move(bjarnePrepare), startWorkFuture};
+
+  std::cout << "BOSS: PREPARE YOUR WORK.\n " << std::endl;
+
+  waitForHerb.wait(), waitForScott.wait(), waitForBjarne.wait();
+  std::cout << "\nBOSS: START YOUR WORK. \n" << std::endl;
+
+  startWorkPromise.set_value();
+
+  herbWork.join();
+  scottWork.join();
+  bjarneWork.join();
+}
+```
 
