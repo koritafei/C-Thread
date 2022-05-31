@@ -3685,4 +3685,474 @@ int main() {
 ```
 
 ## 并发架构
+集中简单模式：
+* 活动对象的设计模式，将执行和调用进行解耦，每个对象会留存在自己的控制线程中,其目标是为了通过使用异步和调度器来引入并发；
+* 监控对象的设计模式，会同步并发方法的执行，以确保对象每次只运行一个成员函数。并且，还允许对象的成员函数协同调度序列的执行。
+
+这两种方式可以以同步和调度的方式运行，主要区别如下：
+> 活动对象在不同的线程中执行；
+> 监控对象和客户端在相同的对象中执行。
+
+与关注子系统的活动对象和监控对象不同，以下的体系结构模式具有系统视角：
+* 半同步/半异步体系结构模式，在并发系统中对异步和同步处理服务进行解耦，从而在不降低太多性能的情况下，简化编程。该模式引入两个通信层，一个用于异步，一个用于同步。
+
+#### 活动对象
+活动对象模式将执行与成员函数解耦，每个对象会留存在自己的控制线程中。其目标是通过异步方法，
+处理调度器的请求，从而触发并发。
+
+执行方法：
+> 1. 客户端的调用转到代理；
+> 2. 代理表现为活动对象的接口；
+> 3. 服务提供活动对象的实现，并在单独的线程中执行；
+> 4. 代理在运行时将客户端的调用转换为服务端的调用，调用程序将方法加入到激活列表中；
+> 5. 调度器和服务在相同的服务中活动，并将方法调用从激活列表中取出，再将其分配到相应的服务上；
+> 6. 客户端可以通过`future`从代理处获取最终的结果。
+
+#### 组件
+活动对象模式由六个组件构成：
+1. 代理为活动对象的可访问方法提供接口，代理将触发激活列表的方法，并请求对象的构造，并且，代理和客户端运行在相同的线程中；
+2. 方法请求类定义了执行活动对象的接口；
+3. 激活列表的目标是维护挂起的请求，激活列表将客户端线程与活动对象线程解耦。代理对入队请求进行处理，而调度器将请求移除队列；
+4. 调度器与代理可在不同的线程中运行。调度器会在活动对象的线程中运行，并决定在接下来执行激活列表的哪个请求；
+5. 可以通过服务实现活动对象，并在活动对象的服务线程中执行，服务也支持代理接口；
+6. `future`由代理创造的，客户端可以从`future`上获取活动对象调用的结果。客户端可以安静等待结果，也可以对结果进行轮询。
+
+![activeobject](./images/activeobject.png)
+优点：
+* 同步只需要在活动对象的线程间进行，不需要在客户端进程间进行；
+* 客户端(用户)和服务器(实现者)之间解耦，同步的挑战主要在实现者的一边；
+* 客户端请求为异步请求，系统吞吐量提高，调用处理密集型方法不会阻塞整个系统；
+* 调度器可以实现各种策略来执行挂起请求，可以按照不同的顺序执行入队请求。
+
+缺点：
+* 请求的粒度太细，活动对象模式的性能开销会很大；
+* 由于调度器的调度策略和操作系统的调度互相影响,调试活动对象模式通常非常困难,尤其是以不同顺序执行请求的情况下。
+
+```cpp
+#include <algorithm>
+#include <deque>
+#include <functional>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <numeric>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
+
+using std::async;
+using std::boolalpha;
+using std::cout;
+using std::deque;
+using std::distance;
+using std::endl;
+using std::find_if;
+using std::for_each;
+using std::future;
+using std::lock_guard;
+using std::make_move_iterator;
+using std::make_pair;
+using std::move;
+using std::mt19937;
+using std::mutex;
+using std::packaged_task;
+using std::pair;
+using std::random_device;
+using std::sort;
+using std::thread;
+using std::uniform_int_distribution;
+using std::vector;
+
+class IsPrime {
+public:
+  pair<bool, int> operator()(int i) {
+    for (int j = 2; j * j <= i; j++) {
+      if (0 == i % j) {
+        return make_pair(false, i);
+      }
+    }
+    return make_pair(true, i);
+  }
+
+private:
+};
+
+class ActiveObject {
+public:
+  future<pair<bool, int>> enqueueTask(int i) {
+    IsPrime isPrime;
+
+    packaged_task<pair<bool, int>(int)> newJob(isPrime);
+
+    auto isPrimoseFuture = newJob.get_future();
+    auto pair            = make_pair(std::move(newJob), i);
+    {
+      lock_guard<mutex> lock{activationListMutex};
+      activationList.push_back(move(pair));
+    }
+
+    return isPrimoseFuture;
+  }
+
+  void run() {
+    thread servant{[this] {
+      while (!isEmpty()) {
+        auto myTask = dequeueTask();
+        myTask.first(myTask.second);
+      }
+    }};
+
+    servant.join();
+  }
+
+private:
+  pair<packaged_task<pair<bool, int>(int)>, int> dequeueTask() {
+    lock_guard<mutex> lock{activationListMutex};
+
+    auto myTask = std::move(activationList.front());
+    activationList.pop_front();
+
+    return myTask;
+  }
+
+  bool isEmpty() {
+    lock_guard<mutex> lock{activationListMutex};
+
+    auto empty = activationList.empty();
+    return empty;
+  }
+
+  deque<pair<packaged_task<pair<bool, int>(int)>, int>> activationList;
+
+  mutex activationListMutex;
+};
+
+vector<int> getRandomNumber(int number) {
+  random_device              seed;
+  mt19937                    engine(seed());
+  uniform_int_distribution<> dist(1000000, 1000000000);
+  vector<int>                numbers;
+  for (long long i = 0; i < number; i++) {
+    numbers.push_back(dist(engine));
+  }
+
+  return numbers;
+}
+
+future<vector<future<pair<bool, int>>>> getFutures(ActiveObject &activeObject,
+                                                   int           numberPrimes) {
+  return async([&activeObject, numberPrimes] {
+    vector<future<pair<bool, int>>> futures;
+    auto randomNumber = getRandomNumber(numberPrimes);
+    for (auto numb : randomNumber) {
+      futures.push_back(activeObject.enqueueTask(numb));
+    }
+
+    return futures;
+  });
+}
+
+int main() {
+  cout << boolalpha << endl;
+  ActiveObject activeObject;
+
+  auto client1 = getFutures(activeObject, 1998);
+  auto client2 = getFutures(activeObject, 2003);
+  auto client3 = getFutures(activeObject, 2011);
+  auto client4 = getFutures(activeObject, 2014);
+  auto client5 = getFutures(activeObject, 2017);
+
+  auto futures  = client1.get();
+  auto futures2 = client2.get();
+  auto futures3 = client3.get();
+  auto futures4 = client4.get();
+  auto futures5 = client5.get();
+
+  futures.insert(futures.end(),
+                 make_move_iterator(futures2.end()),
+                 make_move_iterator(futures2.end()));
+  futures.insert(futures.end(),
+                 make_move_iterator(futures3.end()),
+                 make_move_iterator(futures3.end()));
+  futures.insert(futures.end(),
+                 make_move_iterator(futures4.end()),
+                 make_move_iterator(futures4.end()));
+  futures.insert(futures.end(),
+                 make_move_iterator(futures5.end()),
+                 make_move_iterator(futures5.end()));
+
+  activeObject.run();
+  vector<pair<bool, int>> futResults;
+  futResults.reserve(futResults.size());
+
+  for (auto &fut : futures) {
+    futResults.push_back(fut.get());
+  }
+
+  sort(futResults.begin(), futResults.end());
+
+  auto prIt =
+      find_if(futResults.begin(), futResults.end(), [](pair<bool, int> pa) {
+        return pa.first == true;
+      });
+
+  cout << "Number primes: " << distance(prIt, futResults.end()) << endl;
+  cout << "Primes: " << endl;
+
+  for_each(prIt, futResults.end(), [](pair<bool, int> p) {
+    cout << p.second << ' ' << std::endl;
+  });
+  cout << "\n\n";
+
+  cout << "Number no primes: " << distance(futResults.begin(), prIt) << endl;
+  cout << "No primes: " << endl;
+  for_each(futResults.begin(), prIt, [](pair<bool, int> p) {
+    cout << p.second << " " << std::endl;
+  });
+  cout << endl;
+}
+```
+#### 监控对象
+监控对象模式会同步并发运行，以确保对象执行一个方法。
+允许对象的执行方法协同调度执行序列。
+
+模式要求：
+多线程同时访问一个共享对象时，需要满足一下要求：
+1. 并发访问时，需要保护共享对象不受非同步读写操作的影响，以避免数据争用；
+2. 必要的同步是实现的一部分，不是接口的一部分；
+3. 当线程处理完共享对象时，需要发送一个通知，以便下一个线程可以使用共享对象，这种机制有助于避免死锁，提高系统性能；
+4. 方法执行后，共享变量的不变量必须保持不变。
+
+组件
+![monitorobject](./images/monitorobject.png)
+1. 监控对象：支持一个或多个方法，每个客户端必须通过这些方法访问对象，每个方法必须在客户端线程中运行；
+2. 同步方法：监控对象支持同步方法。任何给定的时间点上只能执行一个方法。线程安全接口有助于区分接口方法和实现方法。
+3. 监控锁：每个对象都有一个监控锁，所可以确保在任何时间点上，只有一个客户端可以访问监控对象；
+4. 监控条件：允许线程在监控对象上进行调度。当前客户端完成同步方法调用后，下一个等待的客户端将被唤醒。
+
+运行时行为：
+监控对象与其组件交互具有不同的阶段。
+* 当客户端调用监控对象的同步方法时，必须锁定全局监控锁，如果客户端访问成功，将执行同步方法，并在结束时解锁；如果客户端访问不成功则阻塞客户端，进入等待状态。
+* 当客户端阻塞时，监控对象会在解锁时，对阻塞的客户端发送通知。通常，等待时资源友好的休眠，不是忙等。
+* 当客户端收到通知时,会锁定监控锁,并执行同步方法。同步方法结束时解锁,并发送监控条件的通知,以通知下一个客户端去执行。
+
+监控对象的优点和缺点是什么? 
+优点: 
+* 同步方法会完全封装在实现中,所以客户端不知道监控对象会隐式同步。
+* 同步方法将自动调度监控条件的通知/等待机制,其表现类似一个简单的调度器。
+缺点: 
+* 功能和同步是强耦合的,所以很难改变同步机制。
+* 当同步方法直接或间接调用同一监控对象时,可能会发生死锁
+
+```cpp
+#include <condition_variable>
+#include <functional>
+#include <iostream>
+#include <mutex>
+#include <queue>
+#include <random>
+#include <thread>
+
+template <typename T>
+class Monitor {
+public:
+  void lock() const {
+    monitMutex.lock();
+  }
+
+  void unlock() const {
+    monitMutex.unlock();
+  }
+
+  void notify_one() const noexcept {
+    monitCond.notify_one();
+  }
+
+  void wait() const {
+    std::unique_lock<std::recursive_mutex> lock{monitMutex};
+    monitCond.wait(lock);
+  }
+
+private:
+  mutable std::recursive_mutex        monitMutex;
+  mutable std::condition_variable_any monitCond;
+};
+
+template <typename T>
+class ThreadSafeQueue : public Monitor<ThreadSafeQueue<T>> {
+public:
+  void add(T val) {
+    derived.lock();
+    _myQueue.push_back(val);
+    derived.unlock();
+    derived.notify_one();
+  }
+
+  T get() {
+    derived.lock();
+    while (_myQueue.empty()) {
+      derived.wait();
+    }
+
+    auto val = _myQueue.front();
+    _myQueue.pop_front();
+
+    derived.unlock();
+
+    return val;
+  }
+
+private:
+  std::deque<T>       _myQueue;
+  ThreadSafeQueue<T> &derived = static_cast<ThreadSafeQueue<T> &>(*this);
+};
+
+class Dice {
+public:
+  int operator()() {
+    return rand();
+  }
+
+private:
+  std::function<int()> rand = std::bind(std::uniform_int_distribution<>(1, 6),
+                                        std::default_random_engine());
+};
+
+int main() {
+  constexpr auto       NUM = 100;
+  ThreadSafeQueue<int> safeQueue;
+
+  auto addLambda = [&safeQueue](int val) {
+    safeQueue.add(val);
+  };
+
+  auto getLambda = [&safeQueue]() {
+    std::cout << safeQueue.get() << " " << std::this_thread::get_id()
+              << std::endl;
+  };
+
+  std::vector<std::thread> addThreads{NUM};
+  Dice                     dice;
+  for (auto &thr : addThreads) {
+    thr = std::thread{addLambda, dice()};
+  }
+
+  std::vector<std::thread> getThreads;
+  for (auto &thr : getThreads) {
+    thr = std::thread{getLambda};
+  }
+
+  for (auto &thr : addThreads) {
+    thr.join();
+  }
+
+  for (auto &thr : getThreads) {
+    thr.join();
+  }
+}
+```
+奇异递归模板模式(`CRTP`)
+> 奇异递归模板模式,简单地说,CRTP代表C++中的一种习惯用法,在这种用法中, Derived类派生自类模板Base,因此Base作为Derived模板参数。
+>```CPP
+> template<class T> 
+> class Base{    
+> .... 
+> };  
+> class Derived : public Base<Derived>{     
+> .... 
+> };
+>```
+
+理解CRTP习惯用法的关键是,实例化方法是惰性的,只有在需要时才实例化方法。
+CRTP有两个主要的用例。
+静态多态性:静态多态性与动态多态性类似,但与使用虚方法的动态多态性相反, 方法调用的分派在编译时进行。
+Mixin: Mixin是设计混合代码类时的一个流行概念。  ThreadSafeQueue 使用Mixin技术来扩展它的接口。通过从  Monitor 类派生  ThreadSafeQueue ,派生类  ThreadSafeQueue 获得类  Monitor 的所有方法:  ThreadSafeQueue: public Monitor<threadsafequeue<T>> 类。
+
+#### 半异步/半同步
+半同步/半异步模式会对并发系统中异步和同步服务进行解耦,从而在不过度降低性能的情况下简化编程。该模式引入了两个可以相互通信的层,一个用于异步,另一个用于同步。
+![半异步半同步](./images/半异步半同步.png)
+半异步半同步通常用于服务器的事件循环或图形界面。
+事件循环的工作流：
+将事件请求插入队，并在单独的线程中同步处理。
+异步处理确保了运行效率,而同步处理简化了申请流程。异步服务层和同步服务层分解为两个层,并且在这两个层之间有队列坐标。异步层由较? 层的系统服务(如中断)组成,而同步层由较高层的服务(如数据库查询或文件操作)组成。异步层和同步层可以通过队列层相互通信。
+
+半同步/半异步模式的优点和缺点是什么? 
+* 优点:
+  * 异步和同步分界线很明确。底层系统服务在异步层中处理,高层服务在同步层中处理。
+  * 对请求队列处理的层,保证了异步层和同步层的解耦。
+  * 清晰的分离使软件更容易理解、调试、维护和扩展。
+  * 同步服务中的阻塞不会影响异步服务。
+* 缺点: 
+  * 异步层和同步层之间交叉的部分可能会导致开销。通常,因为异步服务通常在内核空间中运行,同步服务在用户空间中运行,所以“边界的部分”会涉及内核空间和用户空间之间的上下文切换。
+  * 为了严格分离各层,要求复制数据或数据是不可变的。
+
+半同步/半异步模式通常用于事件的多路分解和调度框架,如Reactor或Proactor模式。
+
+##### `Reactor`模式
+调度程序或通知程序。
+事件驱动的框架，用于将多个请求服务并发的分到各个服务端。
+
+使用要求：
+服务器应该并发的处理客户端请求。每个客户端请求都有一个唯一标识符，并支持映射到对应的客户端。
+以下几点是`Reactor`必备：
+* 不阻塞；
+* 支持大吞吐量，避免不必要的上下文切换，避免数据的复制与同步；
+* 易于扩展，支持服务的修改；
+* 不使用复杂的同步机制。
+
+对于支持的服务类型，实现一个事件处理程序来满足特定客户端的需求。
+![reactor](./images/reactor.png)
+* 句柄: 
+  * 句柄标识了事件源,如网络连接、打开文件或GUI事件。
+  * 事件源生成连接、读或写等事件,这些事件会在句柄上进行排队。
+* 同步事件多路分解器: 
+  * 同步事件多路分解器会等待一个或多个事件。
+  * 多路分解器会进行阻塞,直到关联的句柄能够处理该事件为止。
+* 事件处理接口: 
+  * 事件处理程序定义了处理特定事件的接口。
+  * 事件处理程序定义了应用程序支持的服务。
+* 特定事件处理程序: 
+  * 特定的事件处理实现,由事件处理接口确定。
+* 反应器: 
+  * 反应器支持接口注册和注销。
+  * 反应器使用同步事件多路分解器,例如系统调用`select, epoll或WaitForMultipleObjects`来等待特定事件。
+  * 反应器将事件映射到具体处理程序上。
+  * 反应器会对事件循环的生命周期进行管理。
+
+`Proactor`模式
+允许事件驱动的应用程序，对异步操作完成时，触发的服务请求进行多路分解和分派。
+解决方案
+将服务分为两部分:异步运行的长时间操作和处理操作结果的程序。
+结果处理程序与反应器模式中的事件处理程序非常相似,不过异步操作通常是操作系统的工作。
+所以,作为反应器模式,Proactor模式定义了事件循环。
+异步操作(如连接请求)是该模式的独特之处,并且在不阻塞调用线程的情况下执行操作。
+当耗时相当长的操作完成时,它将一个完成事件放入完成事件队列,Proactor通过使用异步事件多路分解器在队列上等待。
+异步事件多路分解器将从队列中删除完成事件,而Proactor将其分派给特定的处理程序,处理操作的结果。
+组件
+Proactor模式由九个组件组成。
+![proactor](./images/proactor.png)
+* 句柄: 
+  * 表示操作系统的实体(如套接字),可以生成完成事件。
+* 异步操作: 
+  * 通常异步执行耗时相当长的操作。可以在套接字上进行读或写操作。
+* 异步操作处理器: 
+  * 执行异步操作,完成后在完成事件队列上注册完成事件。
+* 完成事件接口: 
+  * 定义处理异步操作结果的接口。
+* 完成事件处理逻辑: 
+  * 用特定的程序处理异步操作的结果。
+* 完成事件队列: 
+  * 作为完成事件的缓冲,直到被异步事件分解器移出队列。
+* 异步事件多路分解器: 
+  * 在完成事件队列上等待完成事件时,可以阻塞程序。
+  * 从完成事件队列中删除完成事件。
+* Proactor: 
+  * 调用异步事件分解器对完成事件进行脱队操作。
+  * 分解和分派完成事件,并调用特定的处理程序处理完成事件。
+* 创建者: 
+  * 调用异步操作。
+  * 可与异步操作处理器进行交互。
+
 

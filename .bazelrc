@@ -1,8 +1,9 @@
 build --action_env=BAZEL_CXXOPTS='-std=c++2z'
+#build --action_env=BAZEL_CXXOPTS='-std=c++1a'
 build --action_env=BAZEL_CXXOPTS='-O2'
 build --action_env=BAZEL_CXXOPTS='-g'
 build --remote_upload_local_results=false
 build --copt -DHAVE_ZLIB=1
-# unittest 
+# unittest
 test --define=unittest=true
 test --copt=-g
