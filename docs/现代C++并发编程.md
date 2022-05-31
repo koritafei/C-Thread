@@ -4155,4 +4155,120 @@ Proactor模式由九个组件组成。
   * 调用异步操作。
   * 可与异步操作处理器进行交互。
 
+#### 最佳实践
+**尽可能减少可变数据共享。**
+**减少等待。**
+
+自定义`constexpr`:
+```cpp
+#include <iostream>
+#include <ostream>
+
+class MyInt {
+public:
+  constexpr MyInt() = default;
+  constexpr MyInt(int first, int second) : myVal1(first), myVal2(second) {
+  }
+
+  MyInt(int i) {
+    myVal1 = i - 2;
+    myVal2 = i + 3;
+  }
+
+  constexpr int getSum() const {
+    return myVal1 + myVal2;
+  }
+
+  friend std::ostream &operator<<(std::ostream &out, const MyInt myInt) {
+    out << "(" << myInt.myVal1 << "," << myInt.myVal2 << ")";
+    return out;
+  }
+
+private:
+  int myVal1 = 1998;
+  int myVal2 = 2003;
+};
+
+int main() {
+  constexpr MyInt myIntConst1;
+  constexpr int   sec = 2014;
+  constexpr MyInt myIntConst2(2011, sec);
+  std::cout << "myIntConst2.getSum(): " << myIntConst2.getSum() << std::endl;
+  int arr[myIntConst2.getSum()];
+  static_assert(myIntConst2.getSum() == 4025, "2011 + 2014 should be 4025");
+}
+```
+多线程创建耗时：
+```cpp
+#include <chrono>
+#include <iostream>
+#include <thread>
+
+static const long long numThreads = 1000000;
+
+int main() {
+  auto start = std::chrono::system_clock::now();
+
+  for (volatile int i = 0; i < numThreads; ++i)
+    std::thread([] {
+    }).detach();
+
+  std::chrono::duration<double> dur = std::chrono::system_clock::now() - start;
+  std::cout << "time: " << dur.count() << " seconds" << std::endl;
+}
+```
+使用任务：
+```cpp
+#include <future>
+#include <iostream>
+#include <thread>
+
+int main() {
+  int         res;
+  std::thread t{[&] {
+    res = 200 + 11;
+  }};
+
+  t.join();
+  std::cout << "res: " << res << std::endl;
+  auto fut = std::async([] {
+    return 2000 + 11;
+  });
+  std::cout << "fut.get(): " << fut.get() << std::endl;
+  std::cout << std::endl;
+}
+```
+使用`shared_ptr`管理指针：
+```cpp
+#include <iostream>
+#include <memory>
+#include <thread>
+
+using namespace std::literals::chrono_literals;
+
+class MyInt {
+public:
+  int val{2011};
+  ~MyInt() {
+    std::cout << "Good Bye" << std::endl;
+  }
+};
+
+void showNumber(std::shared_ptr<MyInt> myInt) {
+  std::cout << myInt->val << std::endl;
+}
+
+void threadCreator() {
+  auto        sharedPtr = std::make_shared<MyInt>();
+  std::thread t1(showNumber, sharedPtr);
+  std::thread t2(showNumber, sharedPtr);
+  t1.detach();
+  t2.detach();
+}
+
+int main() {
+  threadCreator();
+  std::this_thread::sleep_for(1s);
+}
+```
 
